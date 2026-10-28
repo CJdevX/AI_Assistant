@@ -1,24 +1,60 @@
 
 import webbrowser
 import subprocess
+import threading
+import queue
 
 import pyttsx3
 import pywhatkit
 import speech_recognition as sr
 
+from calendar_reminders import start_reminder_monitor
 
-# Initialize JARVIS voice
-engine = pyttsx3.init()
-engine.setProperty("rate", 175)
+# Initialize JARVIS speech queue
+speech_queue = queue.Queue()
 
 recognizer = sr.Recognizer()
 
 
+
+
+def speech_worker():
+    """Handle all speech using one dedicated thread."""
+    try:
+        engine = pyttsx3.init()
+        engine.setProperty("rate", 175)
+
+        while True:
+            item = speech_queue.get()
+
+            if item is None:
+                speech_queue.task_done()
+                break
+
+            message, done_event = item
+
+            try:
+                engine.say(message)
+                engine.runAndWait()
+
+            except Exception as error:
+                print(f"Voice engine error: {error}")
+            finally:
+                done_event.set()
+                speech_queue.task_done()
+
+    except Exception as error:
+        print(f"Voice worker failed: {error}")
+
+
+
 def speak(message):
-    """Speak a message and display it."""
+    """Display a message and speak it safely."""
     print(f"JARVIS: {message}")
-    engine.say(message)
-    engine.runAndWait()
+
+    done_event = threading.Event()
+    speech_queue.put((message, done_event))
+    done_event.wait()
 
 
 def listen():
@@ -93,19 +129,38 @@ def handle_command(command):
         return True
 
     if command in ("help", "what can you do"):
-        speak(
-            "You can ask me to play a song, "
-            "open YouTube, open Google, "
-            "or open Notepad. Say exit to quit."
-        )
-        return True
+        message = (
+        "You can ask me to play a song, "
+        "open YouTube, open Google, "
+        "or open Notepad. Say exit to quit."
+    )
+
+    print(f"JARVIS: {message}")
+
+    test_engine = pyttsx3.init()
+    test_engine.setProperty("rate", 175)
+    test_engine.say(message)
+    test_engine.runAndWait()
+    test_engine.stop()
+
+    return True
 
     speak("That command is not supported yet.")
     return True
 
 
 def main():
+    voice_thread = threading.Thread(
+        target=speech_worker,
+        daemon=True,
+    )
+    voice_thread.start()
+
     speak("Hello. I am JARVIS.")
+
+    reminder_stop_event = threading.Event()
+    reminder_stop_event = start_reminder_monitor(speak)
+    
     speak("Choose voice mode or text mode.")
 
     while True:
@@ -119,14 +174,19 @@ def main():
 
     speak("JARVIS is ready.")
 
-    while True:
-        if mode == "v":
-            command = listen()
-        else:
-            command = input("\nYOU: ").lower().strip()
+    try:
+        while True:
+            if mode == "v":
+                command = listen()
+            else:
+                command = input("\nYOU: ").lower().strip()
 
-        if not handle_command(command):
-            break
+            if not handle_command(command):
+                break
+
+    finally:
+        reminder_stop_event.set()
+        speak("JARVIS reminder monitor stopped.")
 
 
 if __name__ == "__main__":
